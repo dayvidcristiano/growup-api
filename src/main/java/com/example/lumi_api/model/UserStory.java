@@ -17,7 +17,7 @@ public class UserStory {
     private String beneficio;
     private String prioridade;
     private String estimativa;
-    private String jiraIssueKey; // NOVO: Para armazenar a chave da Issue criada no Jira
+    private String jiraIssueKey;
 
     public UserStory() {}
 

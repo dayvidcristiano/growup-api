@@ -11,12 +11,12 @@ import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
 import java.util.Base64;
 import java.util.List;
-import java.nio.charset.StandardCharsets; // Importação adicionada
+import java.nio.charset.StandardCharsets;
 
 @Service
 public class JiraService {
 
-    private static final String ISSUE_TYPE_STORY = "Task"; // Mantido como "Task"
+    private static final String ISSUE_TYPE_STORY = "Task";
 
     @Value("${jira.base-url}")
     private String jiraBaseUrl;
@@ -77,7 +77,6 @@ public class JiraService {
     }
 
     private HttpHeaders createHeaders() {
-        // CORREÇÃO: Usa StandardCharsets.UTF_8 para garantir a codificação correta
         String auth = jiraUserEmail + ":" + jiraApiToken;
         String encodedAuth = Base64.getEncoder().encodeToString(auth.getBytes(StandardCharsets.UTF_8));
 
@@ -87,7 +86,6 @@ public class JiraService {
         return headers;
     }
 
-    // DTOs (omissos para brevidade, mas devem estar no seu arquivo)
     private static class CreateIssueRequest {
         public Fields fields;
 
