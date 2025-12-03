@@ -1,5 +1,6 @@
 package com.example.lumi_api.service;
 
+import com.example.lumi_api.model.UserStory;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -10,17 +11,15 @@ import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
 import java.util.Base64;
 import java.util.List;
+import java.nio.charset.StandardCharsets; // Importação adicionada
 
 @Service
 public class JiraService {
 
-    private static final String ISSUE_TYPE_STORY = "Story";
+    private static final String ISSUE_TYPE_STORY = "Task"; // Mantido como "Task"
 
     @Value("${jira.base-url}")
-    private String jiraBaseUrl; // Mantém a URL base (Issue endpoint)
-
-    @Value("${jira.project-key}")
-    private String jiraProjectKey;
+    private String jiraBaseUrl;
 
     @Value("${jira.user-email}")
     private String jiraUserEmail;
@@ -36,88 +35,70 @@ public class JiraService {
         this.objectMapper = objectMapper;
     }
 
-    // --- NOVO MÉTODO: Puxar algo do quadro para testar a conexão ---
-    public String verificarConexaoProjeto() {
-        String projectUrl = "https://cesar-team-qbew2ary.atlassian.net/rest/api/3/project/" + jiraProjectKey;
+    public String criarIssue(UserStory historia, String projectKey) {
 
-        String auth = jiraUserEmail + ":" + jiraApiToken;
-        String authHeader = "Basic " + Base64.getEncoder().encodeToString(auth.getBytes());
+        String titulo = "Como " + historia.getPapel() + ", quero " + historia.getAcao() + " para " + historia.getBeneficio();
+        String descricao = String.format(
+                "Prioridade Sugerida: %s\nEstimativa Sugerida: %s\n\n**Detalhes da História:**\nComo %s, eu quero %s para %s.",
+                historia.getPrioridade(),
+                historia.getEstimativa(),
+                historia.getPapel(),
+                historia.getAcao(),
+                historia.getBeneficio()
+        );
 
-        HttpHeaders headers = new HttpHeaders();
-        headers.set(HttpHeaders.AUTHORIZATION, authHeader);
+        CreateIssueRequest requestBody = new CreateIssueRequest(
+                titulo,
+                projectKey,
+                ISSUE_TYPE_STORY,
+                descricao
+        );
 
-        HttpEntity<String> entity = new HttpEntity<>(headers);
-
-        try {
-            // Chamada GET para o endpoint de projeto
-            ResponseEntity<String> response = restTemplate.exchange(
-                    projectUrl, HttpMethod.GET, entity, String.class);
-
-            JsonNode root = objectMapper.readTree(response.getBody());
-            String nomeProjeto = root.path("name").asText();
-            String idProjeto = root.path("id").asText();
-
-            return "Conexão com o Jira estabelecida! Projeto: " + nomeProjeto + " (ID: " + idProjeto + "). A chave '" + jiraProjectKey + "' é válida.";
-
-        } catch (HttpClientErrorException.NotFound e) {
-            return "Falha na conexão: Chave do projeto '" + jiraProjectKey + "' não encontrada ou usuário sem permissão de acesso ao projeto.";
-        } catch (HttpClientErrorException.Forbidden e) {
-            return "Falha na conexão: Autenticação bem-sucedida, mas o usuário não tem permissão para visualizar o projeto '" + jiraProjectKey + "'.";
-        } catch (Exception e) {
-            System.err.println("Erro ao verificar conexão com o Jira: " + e.getMessage());
-            return "Falha grave na conexão ou autenticação. Verifique o token e o e-mail.";
-        }
-    }
-
-    // O método criarIssueDeTeste foi mantido aqui para referência, mas a lógica de Business (IssueADF) foi movida abaixo para manter a consistência.
-    public String criarIssueDeTeste(String titulo, String descricao) {
-
-        String auth = jiraUserEmail + ":" + jiraApiToken;
-        String authHeader = "Basic " + Base64.getEncoder().encodeToString(auth.getBytes());
-
-        String issueJson = createIssueJson(titulo, descricao, ISSUE_TYPE_STORY);
-
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_JSON);
-        headers.set(HttpHeaders.AUTHORIZATION, authHeader);
-
-        HttpEntity<String> entity = new HttpEntity<>(issueJson, headers);
+        HttpHeaders headers = createHeaders();
+        HttpEntity<CreateIssueRequest> entity = new HttpEntity<>(requestBody, headers);
 
         try {
             ResponseEntity<String> response = restTemplate.exchange(
-                    jiraBaseUrl, HttpMethod.POST, entity, String.class);
-
-            JsonNode root = objectMapper.readTree(response.getBody());
-            return "Issue criada com sucesso. Chave: " + root.path("key").asText() + ", URL: " + root.path("self").asText();
-
-        } catch (Exception e) {
-            System.err.println("Erro ao criar Issue no Jira: " + e.getMessage());
-            throw new RuntimeException("Falha ao se comunicar com a API do Jira.", e);
-        }
-    }
-
-    // Métodos privados para construção do JSON (ADF)
-    private String createIssueJson(String summary, String description, String issueTypeName) {
-        try {
-            DescriptionADF descriptionADF = new DescriptionADF(description);
-
-            JiraIssueRequest request = new JiraIssueRequest(
-                    new Fields(
-                            summary,
-                            new Project(jiraProjectKey),
-                            new IssueType(issueTypeName),
-                            descriptionADF
-                    )
+                    jiraBaseUrl,
+                    HttpMethod.POST,
+                    entity,
+                    String.class
             );
-            return objectMapper.writeValueAsString(request);
+
+            JsonNode root = objectMapper.readTree(response.getBody());
+            return root.path("key").asText();
+
+        } catch (HttpClientErrorException e) {
+            String errorMsg = e.getResponseBodyAsString();
+            throw new RuntimeException("Falha ao criar issue no Jira. Código: " + e.getStatusCode() + ". Erro: " + errorMsg, e);
         } catch (JsonProcessingException e) {
-            throw new RuntimeException("Erro ao serializar JSON para o Jira.", e);
+            throw new RuntimeException("Erro ao processar a resposta JSON do Jira.", e);
         }
     }
 
-    private static class JiraIssueRequest {
+    private HttpHeaders createHeaders() {
+        // CORREÇÃO: Usa StandardCharsets.UTF_8 para garantir a codificação correta
+        String auth = jiraUserEmail + ":" + jiraApiToken;
+        String encodedAuth = Base64.getEncoder().encodeToString(auth.getBytes(StandardCharsets.UTF_8));
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("Authorization", "Basic " + encodedAuth);
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        return headers;
+    }
+
+    // DTOs (omissos para brevidade, mas devem estar no seu arquivo)
+    private static class CreateIssueRequest {
         public Fields fields;
-        public JiraIssueRequest(Fields fields) { this.fields = fields; }
+
+        public CreateIssueRequest(String summary, String projectKey, String issueType, String description) {
+            this.fields = new Fields(
+                    summary,
+                    new Project(projectKey),
+                    new IssueType(issueType),
+                    new DescriptionADF(description)
+            );
+        }
     }
 
     private static class Fields {
@@ -125,6 +106,7 @@ public class JiraService {
         public Project project;
         public IssueType issuetype;
         public DescriptionADF description;
+
         public Fields(String summary, Project project, IssueType issuetype, DescriptionADF description) {
             this.summary = summary;
             this.project = project;
@@ -143,7 +125,6 @@ public class JiraService {
         public IssueType(String name) { this.name = name; }
     }
 
-    // DTOs para o formato Atlassian Document Format (ADF)
     private static class DescriptionADF {
         public String type = "doc";
         public int version = 1;

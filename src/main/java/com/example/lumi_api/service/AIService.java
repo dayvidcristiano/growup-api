@@ -9,10 +9,25 @@ import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
+import java.util.ArrayList;
 import java.util.List;
 
 @Service
 public class AIService {
+
+    private static final String SYSTEM_INSTRUCTION = """
+        Você é um especialista em análise de requisitos e deve criar histórias de usuário com base no input (documento e texto adicional). A resposta deve ser **SOMENTE** um array JSON contendo objetos UserStory, no seguinte formato:
+        [
+          {
+            "papel": "...",
+            "acao": "...",
+            "beneficio": "...",
+            "prioridade": "ALTA|MEDIA|BAIXA",
+            "estimativa": "P|M|G"
+          },
+          ...
+        ]
+        """;
 
     @Value("${integrations.gemini.api-key}")
     private String geminiApiKey;
@@ -28,8 +43,8 @@ public class AIService {
         this.objectMapper = objectMapper;
     }
 
-    public List<UserStory> gerarHistorias(String prompt) {
-        String jsonBody = createGeminiRequestBody(prompt);
+    public List<UserStory> gerarHistorias(String prompt, String fileBase64, String mimeType) {
+        String jsonBody = createGeminiRequestBody(prompt, fileBase64, mimeType);
         String fullUrl = geminiBaseUrl + "?key=" + geminiApiKey;
 
         HttpHeaders headers = new HttpHeaders();
@@ -38,65 +53,82 @@ public class AIService {
 
         try {
             ResponseEntity<String> response = restTemplate.exchange(
-                    fullUrl, HttpMethod.POST, entity, String.class);
+                    fullUrl,
+                    HttpMethod.POST,
+                    entity,
+                    String.class
+            );
 
-            return processGeminiResponse(response.getBody());
-
+            if (response.getStatusCode() == HttpStatus.OK && response.getBody() != null) {
+                return parseGeminiResponse(response.getBody());
+            } else {
+                throw new RuntimeException("Erro de comunicação com o serviço Gemini: " + response.getStatusCode() + " " + response.getBody());
+            }
         } catch (Exception e) {
-            String errorMessage = e.getMessage();
-            if (e.getMessage().contains("400 Bad Request")) {
-                errorMessage = e.getMessage().substring(e.getMessage().indexOf("{"));
-            }
-            throw new RuntimeException("Falha na comunicação com a API Gemini: " + errorMessage, e);
+            throw new RuntimeException("Erro de comunicação com o serviço Gemini: " + e.getMessage(), e);
         }
     }
 
-    private String createGeminiRequestBody(String prompt) {
-        String systemInstruction = "Você é um especialista em engenharia de requisitos. Gere uma lista de histórias de usuário no formato JSON. Cada história deve ser um objeto com os campos: id (number), papel (string), acao (string), beneficio (string), prioridade (string: ALTA, MEDIA, BAIXA), e estimativa (string: ex. '4h'). Envolva a lista de objetos em um array chamado 'historias'.";
-        String userPrompt = "Requisitos do projeto: " + prompt;
+    private String createGeminiRequestBody(String prompt, String fileBase64, String mimeType) {
+        String fullPrompt = SYSTEM_INSTRUCTION + "\n\n--- INPUT DO USUÁRIO ---\n\n" + prompt;
 
+        GeminiRequest request = new GeminiRequest(fullPrompt, fileBase64, mimeType);
         try {
-            return objectMapper.writeValueAsString(new GeminiRequest(systemInstruction, userPrompt));
+            return objectMapper.writeValueAsString(request);
         } catch (JsonProcessingException e) {
-            throw new RuntimeException("Erro ao construir o JSON de requisição para o Gemini.", e);
+            throw new RuntimeException("Erro ao serializar o corpo do request Gemini.", e);
         }
     }
 
-    private List<UserStory> processGeminiResponse(String responseBody) {
-        try {
-            JsonNode root = objectMapper.readTree(responseBody);
+    private List<UserStory> parseGeminiResponse(String responseBody) throws JsonProcessingException {
+        JsonNode rootNode = objectMapper.readTree(responseBody);
+        JsonNode candidates = rootNode.path("candidates");
 
-            JsonNode candidate = root.path("candidates").get(0);
-            JsonNode content = candidate.path("content");
-            String jsonText = content.path("parts").get(0).path("text").asText();
+        if (candidates.isArray() && !candidates.isEmpty()) {
+            JsonNode contentNode = candidates.get(0).path("content");
+            if (contentNode.path("parts").isArray() && !contentNode.path("parts").isEmpty()) {
+                String jsonText = contentNode.path("parts").get(0).path("text").asText();
 
-            JsonNode generatedJson = objectMapper.readTree(jsonText);
-            JsonNode historiasNode = generatedJson.path("historias");
+                if (jsonText.startsWith("```json")) {
+                    jsonText = jsonText.substring(jsonText.indexOf('\n') + 1);
+                    if (jsonText.endsWith("```")) {
+                        jsonText = jsonText.substring(0, jsonText.lastIndexOf("```"));
+                    }
+                }
 
-            if (historiasNode.isArray()) {
-                return objectMapper.readValue(
-                        historiasNode.toString(),
-                        objectMapper.getTypeFactory().constructCollectionType(List.class, UserStory.class)
-                );
+                try {
+                    return objectMapper.readValue(jsonText, objectMapper.getTypeFactory().constructCollectionType(List.class, UserStory.class));
+                } catch (JsonProcessingException e) {
+                    throw new RuntimeException("Erro ao converter o JSON da IA para a lista de UserStory. JSON retornado: " + jsonText, e);
+                }
             }
-            throw new RuntimeException("O JSON de resposta do Gemini não contém o array 'historias'.");
-
-        } catch (JsonProcessingException e) {
-            throw new RuntimeException("Erro ao processar o JSON de resposta da API Gemini.", e);
         }
+
+        JsonNode promptFeedback = rootNode.path("promptFeedback");
+        if (promptFeedback.has("blockReason")) {
+            String blockReason = promptFeedback.path("blockReason").asText();
+            throw new RuntimeException("A requisição foi bloqueada pelo Gemini. Motivo: " + blockReason);
+        }
+
+        throw new RuntimeException("O JSON de resposta do Gemini não contém o array 'candidates'.");
     }
 
     private static class GeminiRequest {
         public List<Content> contents;
         public GenerationConfig generationConfig;
 
-        // O campo systemInstruction foi removido do nível superior
+        public GeminiRequest(String userPrompt, String fileBase64, String mimeType) {
 
-        public GeminiRequest(String instruction, String userPrompt) {
-            // A System Instruction é adicionada como o primeiro Content com a role 'system'
+            List<Part> userParts = new ArrayList<>();
+
+            if (fileBase64 != null && mimeType != null) {
+                userParts.add(new Part(fileBase64, mimeType));
+            }
+
+            userParts.add(new Part(userPrompt));
+
             this.contents = List.of(
-                    new Content("system", List.of(new Part(instruction))),
-                    new Content("user", List.of(new Part(userPrompt)))
+                    new Content("user", userParts)
             );
             this.generationConfig = new GenerationConfig();
         }
@@ -113,8 +145,24 @@ public class AIService {
 
     private static class Part {
         public String text;
+        public InlineData inlineData;
+
         public Part(String text) {
             this.text = text;
+        }
+
+        public Part(String data, String mimeType) {
+            this.inlineData = new InlineData(data, mimeType);
+        }
+    }
+
+    private static class InlineData {
+        public String data;
+        public String mimeType;
+
+        public InlineData(String data, String mimeType) {
+            this.data = data;
+            this.mimeType = mimeType;
         }
     }
 
@@ -123,5 +171,21 @@ public class AIService {
 
         public GenerationConfig() {
         }
+    }
+
+    private static class PromptFeedback {
+        public List<SafetyRating> safetyRatings;
+        public String blockReason;
+    }
+
+    private static class SafetyRating {
+        public String category;
+        public String probability;
+    }
+
+    private static class Candidate {
+        public Content content;
+        public String finishReason;
+        public List<SafetyRating> safetyRatings;
     }
 }

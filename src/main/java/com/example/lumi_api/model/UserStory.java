@@ -17,8 +17,11 @@ public class UserStory {
     private String beneficio;
     private String prioridade;
     private String estimativa;
+    private String jiraIssueKey; // NOVO: Para armazenar a chave da Issue criada no Jira
 
     public UserStory() {}
+
+    // Getters e Setters
 
     public Long getId() {
         return id;
@@ -66,5 +69,14 @@ public class UserStory {
 
     public void setEstimativa(String estimativa) {
         this.estimativa = estimativa;
+    }
+
+    // Getter e Setter para a nova propriedade
+    public String getJiraIssueKey() {
+        return jiraIssueKey;
+    }
+
+    public void setJiraIssueKey(String jiraIssueKey) {
+        this.jiraIssueKey = jiraIssueKey;
     }
 }
