@@ -16,7 +16,6 @@ Uma plataforma que utiliza IA para analisar documentos de requisitos, gerar hist
 
 ## 👥 Squad
 
-* **Alan Vitor Ferreira Sobral**
 * **Dayvid Cristiano Viana da Silva**
 * **Enzo Antuña Ferreira**
 * **Jeniffer Cristine Lopes da Conceição**
